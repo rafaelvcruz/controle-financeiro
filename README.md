@@ -1,14 +1,14 @@
 # Controle Financeiro Familiar
 
-Projeto inicial executável para controle financeiro familiar, com Angular, FastAPI, PostgreSQL e Docker Compose.
+Projeto em evolução para controle financeiro familiar, com Angular, FastAPI, PostgreSQL e Docker Compose.
 
 ## Escopo desta primeira entrega
 
 - Backend REST com CRUD básico para pessoas, categorias, grupos, subgrupos e contas financeiras.
 - PostgreSQL persistente em volume Docker.
-- Frontend Angular responsivo com painel inicial e consulta/cadastro de categorias.
+- Frontend Angular responsivo para lançamentos, contas e transferências.
 - Endpoint de saúde em `/api/health` e documentação OpenAPI em `/docs`.
-- Modelo preparado para evolução de lançamentos, orçamentos, cartões e objetivos.
+- Modelo em evolução para orçamento, cartões e objetivos.
 
 > **Atenção:** esta é uma base de desenvolvimento, não uma instalação pronta para uso com dados financeiros reais. Autenticação, autorização, auditoria completa, política de backup testada, HTTPS e validações financeiras avançadas ainda precisam ser implementadas antes de expor a aplicação ou utilizá-la como sistema oficial.
 
@@ -69,10 +69,10 @@ A API disponibiliza CRUD para pessoas, categorias, grupos, subgrupos e contas. A
 
 1. Revisar os cadastros reais da planilha e fazer a carga seletiva validada.
 2. Implementar autenticação e usuários/perfis.
-3. Implementar lançamentos, transferências e ajustes de saldo com transações atômicas.
-4. Implementar orçamento mensal e previsto x realizado.
-5. Implementar cartões, faturas e parcelamentos.
-6. Implementar backup automatizado com teste de restauração.
+3. Implementar orçamento mensal e previsto x realizado.
+4. Implementar cartões, faturas e parcelamentos.
+5. Implementar autenticação, auditoria e backup automatizado.
+6. Criar e validar migration Alembic inicial e teste de restauração do backup.
 
 ## Módulo de lançamentos (versão 0.2.0)
 
@@ -84,8 +84,22 @@ A versão seguinte acrescenta:
 - Consulta de saldo por conta em `GET /api/accounts/{id}/balance`.
 - Listagem e cadastro em `GET/POST /api/entries` e `GET/POST /api/transfers`.
 
-A tela inicial agora permite cadastrar e listar receitas, despesas e investimentos. A seleção de grupo e subgrupo depende da categoria escolhida. O cancelamento está disponível na listagem e a API já permite atualizar um lançamento por `PUT /api/entries/{id}`. A tela para cadastrar transferências e a edição visual dos lançamentos ainda serão implementadas nas próximas etapas.
+A tela inicial agora permite cadastrar e listar receitas, despesas e investimentos. A seleção de grupo e subgrupo depende da categoria escolhida. O cancelamento está disponível na listagem e a API já permite atualizar um lançamento por `PUT /api/entries/{id}`. A edição visual dos lançamentos está disponível na listagem. A tela de contas e transferências está disponível na seção correspondente.
 
 **Regra para saldo inicial:** `balance_date` é a data de abertura do saldo informado. O cálculo soma movimentações realizadas a partir dessa data, incluindo a própria data. Movimentações anteriores à data de abertura não alteram o saldo calculado.
 
 **Observação:** esta versão ainda usa `Base.metadata.create_all` na inicialização para criar tabelas ausentes. Antes de uma utilização continuada com dados importantes, vamos criar e validar uma migration Alembic inicial e configurar backup automatizado.
+
+## Contas, transferências e edição (versão 0.3.0)
+
+A interface agora possui uma seção **Contas e transferências** com:
+- Cadastro e edição de contas financeiras, tipo, responsável, saldo inicial e data do saldo inicial.
+- Saldo atual por conta e saldo consolidado.
+- Registro e consulta de transferências entre contas.
+- Validação para impedir transferência entre a mesma conta.
+
+Na seção **Lançamentos**, é possível editar visualmente os registros existentes, além de cancelar lançamentos. A API também disponibiliza `GET /api/accounts/summary` para retornar as contas com seus saldos calculados e `PUT /api/accounts/{id}` para edição de conta.
+
+**Atenção ao editar saldo inicial:** o valor e a data de abertura são a base para o cálculo do saldo atual. Alterá-los pode mudar o resultado apresentado para a conta. O sistema ainda não mantém histórico de versões do saldo inicial.
+
+**Validação desta entrega:** sintaxe Python e testes de API com banco SQLite em memória foram executados, incluindo cadastro/edição de conta e transferência com conferência dos saldos. A compilação Angular e as imagens Docker foram construídas; a execução integrada com PostgreSQL via Docker Compose ainda não foi validada.

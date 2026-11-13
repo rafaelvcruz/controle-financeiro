@@ -7,92 +7,64 @@ type Category = { id: number; name: string; nature: string; active: boolean };
 type Group = { id: number; category_id: number; name: string; active: boolean };
 type Subgroup = { id: number; group_id: number; name: string; active: boolean };
 type Person = { id: number; name: string; active: boolean };
-type Account = { id: number; name: string; account_type: string; initial_balance: string; balance_date: string; active: boolean };
+type Account = { id: number; name: string; account_type: string; initial_balance: string; balance_date: string; active: boolean; person_id: number | null; notes?: string | null; balance?: string };
 type Entry = { id: number; movement_date: string; competence_date: string; entry_type: string; description: string; amount: string; person_id: number | null; account_id: number; subgroup_id: number | null; status: string };
-
+type Transfer = { id: number; movement_date: string; from_account_id: number; to_account_id: number; amount: string; status: string; description: string };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 
 @Component({ selector: 'app-root', standalone: true, imports: [CommonModule, FormsModule], template: `
-<div class="shell">
-  <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">$</span><div><strong>Meu Financeiro</strong><small>CONTROLE FAMILIAR</small></div></div>
-    <nav><a class="active">⇄ <span>Lançamentos</span></a><a>▦ <span>Visão geral</span></a><a>▤ <span>Planejamento</span></a><a>▣ <span>Cartões</span></a><a>◷ <span>Relatórios</span></a><a>⚙ <span>Cadastros</span></a></nav>
-    <div class="sidebar-foot">Versão inicial · 0.2.0</div>
-  </aside>
-  <main class="content">
-    <header><div><p class="eyebrow">CONTROLE FINANCEIRO FAMILIAR</p><h1>Lançamentos</h1><p class="muted">Registre e acompanhe as movimentações da família.</p></div><div class="avatar">RF</div></header>
-    <section class="notice"><strong>Como os saldos são calculados</strong><span>Somente lançamentos realizados afetam os saldos. Itens previstos ficam fora do saldo atual, cancelados são ignorados e transferências entre contas não são tratadas como receita ou despesa.</span></section>
-    <section class="panel entry-panel">
-      <div class="panel-head"><div><h2>Novo lançamento</h2><p class="muted">Informe os dados da receita, despesa ou investimento.</p></div></div>
-      <form (ngSubmit)="addEntry()" class="entry-form">
-        <label>Tipo<select name="entryType" [(ngModel)]="form.entry_type" (ngModelChange)="onTypeChange()"><option value="DESPESA">Despesa</option><option value="RECEITA">Receita</option><option value="INVESTIMENTO">Investimento</option></select></label>
-        <label>Descrição<input name="description" [(ngModel)]="form.description" placeholder="Ex.: Supermercado" required minlength="2"></label>
-        <label>Valor (R$)<input name="amount" type="number" min="0.01" step="0.01" [(ngModel)]="form.amount" placeholder="0,00" required></label>
-        <label>Data<input name="movementDate" type="date" [(ngModel)]="form.movement_date" required></label>
-        <label>Competência<input name="competenceDate" type="date" [(ngModel)]="form.competence_date" required></label>
-        <label>Conta<select name="account" [(ngModel)]="form.account_id" required><option [ngValue]="null">Selecione</option><option *ngFor="let a of accounts" [ngValue]="a.id">{{ a.name }}</option></select></label>
-        <label>Responsável<select name="person" [(ngModel)]="form.person_id"><option [ngValue]="null">Não informado</option><option *ngFor="let p of people" [ngValue]="p.id">{{ p.name }}</option></select></label>
-        <label>Categoria<select name="category" [(ngModel)]="selectedCategoryId" (ngModelChange)="onCategoryChange()"><option [ngValue]="null">Selecione</option><option *ngFor="let c of availableCategories" [ngValue]="c.id">{{ c.name }}</option></select></label>
-        <label>Grupo<select name="group" [(ngModel)]="selectedGroupId" (ngModelChange)="onGroupChange()"><option [ngValue]="null">Selecione</option><option *ngFor="let g of availableGroups" [ngValue]="g.id">{{ g.name }}</option></select></label>
-        <label>Subgrupo<select name="subgroup" [(ngModel)]="form.subgroup_id"><option [ngValue]="null">Não informado</option><option *ngFor="let s of availableSubgroups" [ngValue]="s.id">{{ s.name }}</option></select></label>
-        <label>Status<select name="status" [(ngModel)]="form.status"><option value="REALIZADO">Realizado</option><option value="PREVISTO">Previsto</option></select></label>
-        <div class="form-actions"><button [disabled]="saving || !canSave">{{ saving ? 'Salvando…' : 'Salvar lançamento' }}</button></div>
-      </form>
-      <p class="feedback" *ngIf="message">{{ message }}</p>
-      <p class="helper" *ngIf="!accounts.length">Cadastre pelo menos uma conta financeira antes de registrar lançamentos.</p>
-    </section>
-    <section class="panel list-panel">
-      <div class="panel-head"><div><h2>Movimentações recentes</h2><p class="muted">Lançamentos cadastrados, do mais recente para o mais antigo.</p></div><span class="count">{{ entries.length }} registros</span></div>
-      <div class="table-wrap"><table><thead><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th>Conta</th><th>Status</th><th class="right">Valor</th><th></th></tr></thead><tbody>
-        <tr *ngFor="let e of entries"><td>{{ e.movement_date | date:'dd/MM/yyyy':'UTC' }}</td><td>{{ e.description }}</td><td>{{ typeLabel(e.entry_type) }}</td><td>{{ accountName(e.account_id) }}</td><td><span class="status" [class.pending]="e.status === 'PREVISTO'">{{ e.status === 'PREVISTO' ? 'Previsto' : e.status === 'CANCELADO' ? 'Cancelado' : 'Realizado' }}</span></td><td class="right" [class.income]="e.entry_type === 'RECEITA'">{{ e.amount | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</td><td><button class="link-button" *ngIf="e.status !== 'CANCELADO'" (click)="cancelEntry(e)">Cancelar</button></td></tr>
-        <tr *ngIf="!entries.length"><td colspan="7" class="empty">Nenhum lançamento cadastrado.</td></tr>
-      </tbody></table></div>
-    </section>
-    <footer>Dados armazenados no servidor local · API FastAPI</footer>
-  </main>
-</div>
+<div class="shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">$</span><div><strong>Meu Financeiro</strong><small>CONTROLE FAMILIAR</small></div></div>
+<nav><a [class.active]="view==='entries'" (click)="view='entries'">⇄ <span>Lançamentos</span></a><a [class.active]="view==='accounts'" (click)="view='accounts'">▣ <span>Contas e transferências</span></a></nav><div class="sidebar-foot">Versão 0.3.0</div></aside>
+<main class="content"><header><div><p class="eyebrow">CONTROLE FINANCEIRO FAMILIAR</p><h1>{{ view==='entries' ? 'Lançamentos' : 'Contas e transferências' }}</h1><p class="muted">{{ view==='entries' ? 'Registre e acompanhe as movimentações da família.' : 'Gerencie contas, saldos iniciais e movimentações entre elas.' }}</p></div><div class="avatar">RF</div></header>
+<p class="feedback" *ngIf="message">{{message}}</p>
+<ng-container *ngIf="view==='entries'">
+<section class="notice"><strong>Como os saldos são calculados</strong><span>Somente lançamentos realizados afetam os saldos. Itens previstos ficam fora do saldo atual, cancelados são ignorados e transferências entre contas não são tratadas como receita ou despesa.</span></section>
+<section class="panel entry-panel"><div class="panel-head"><div><h2>{{ editingId ? 'Editar lançamento' : 'Novo lançamento' }}</h2><p class="muted">Informe os dados da receita, despesa ou investimento.</p></div></div>
+<form (ngSubmit)="saveEntry()" class="entry-form">
+<label>Tipo<select name="entryType" [(ngModel)]="form.entry_type" (ngModelChange)="onTypeChange()"><option value="DESPESA">Despesa</option><option value="RECEITA">Receita</option><option value="INVESTIMENTO">Investimento</option></select></label>
+<label>Descrição<input name="description" [(ngModel)]="form.description" required minlength="2"></label><label>Valor (R$)<input name="amount" type="number" min="0.01" step="0.01" [(ngModel)]="form.amount" required></label>
+<label>Data<input name="movementDate" type="date" [(ngModel)]="form.movement_date" required></label><label>Competência<input name="competenceDate" type="date" [(ngModel)]="form.competence_date" required></label>
+<label>Conta<select name="account" [(ngModel)]="form.account_id" required><option [ngValue]="null">Selecione</option><option *ngFor="let a of accounts" [ngValue]="a.id">{{a.name}}</option></select></label>
+<label>Responsável<select name="person" [(ngModel)]="form.person_id"><option [ngValue]="null">Não informado</option><option *ngFor="let p of people" [ngValue]="p.id">{{p.name}}</option></select></label>
+<label>Categoria<select name="category" [(ngModel)]="selectedCategoryId" (ngModelChange)="onCategoryChange()"><option [ngValue]="null">Selecione</option><option *ngFor="let c of availableCategories" [ngValue]="c.id">{{c.name}}</option></select></label>
+<label>Grupo<select name="group" [(ngModel)]="selectedGroupId" (ngModelChange)="onGroupChange()"><option [ngValue]="null">Selecione</option><option *ngFor="let g of availableGroups" [ngValue]="g.id">{{g.name}}</option></select></label>
+<label>Subgrupo<select name="subgroup" [(ngModel)]="form.subgroup_id"><option [ngValue]="null">Não informado</option><option *ngFor="let s of availableSubgroups" [ngValue]="s.id">{{s.name}}</option></select></label>
+<label>Status<select name="status" [(ngModel)]="form.status"><option value="REALIZADO">Realizado</option><option value="PREVISTO">Previsto</option></select></label>
+<div class="form-actions"><button [disabled]="saving || !canSave">{{saving?'Salvando…':editingId?'Salvar alterações':'Salvar lançamento'}}</button><button type="button" class="secondary" *ngIf="editingId" (click)="resetEntry()">Cancelar edição</button></div></form>
+<p class="helper" *ngIf="!accounts.length">Cadastre pelo menos uma conta financeira na seção Contas e transferências.</p></section>
+<section class="panel list-panel"><div class="panel-head"><div><h2>Movimentações recentes</h2><p class="muted">Edite ou cancele os lançamentos cadastrados.</p></div><span class="count">{{entries.length}} registros</span></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th>Conta</th><th>Status</th><th class="right">Valor</th><th>Ações</th></tr></thead><tbody>
+<tr *ngFor="let e of entries"><td>{{e.movement_date | date:'dd/MM/yyyy':'UTC'}}</td><td>{{e.description}}</td><td>{{typeLabel(e.entry_type)}}</td><td>{{accountName(e.account_id)}}</td><td><span class="status" [class.pending]="e.status==='PREVISTO'">{{statusLabel(e.status)}}</span></td><td class="right" [class.income]="e.entry_type==='RECEITA'">{{e.amount | currency:'BRL':'symbol':'1.2-2':'pt-BR'}}</td><td><button class="link-button" *ngIf="e.status!=='CANCELADO'" (click)="editEntry(e)">Editar</button><button class="link-button" *ngIf="e.status!=='CANCELADO'" (click)="cancelEntry(e)">Cancelar</button></td></tr>
+<tr *ngIf="!entries.length"><td colspan="7" class="empty">Nenhum lançamento cadastrado.</td></tr></tbody></table></div></section></ng-container>
+<ng-container *ngIf="view==='accounts'">
+<section class="cards"><article class="metric"><span>Saldo consolidado</span><strong>{{totalBalance() | currency:'BRL':'symbol':'1.2-2':'pt-BR'}}</strong><small>Soma dos saldos atuais das contas</small></article><article class="metric"><span>Contas ativas</span><strong>{{activeAccountCount}}</strong><small>Contas cadastradas</small></article></section>
+<section class="panel entry-panel"><div class="panel-head"><div><h2>{{editingAccountId?'Editar conta':'Nova conta financeira'}}</h2><p class="muted">O saldo inicial representa o valor disponível na data informada.</p></div></div><form class="entry-form" (ngSubmit)="saveAccount()">
+<label>Nome da conta<input name="accountName" [(ngModel)]="accountForm.name" placeholder="Ex.: Conta corrente" required></label><label>Tipo<select name="accountType" [(ngModel)]="accountForm.account_type"><option value="CORRENTE">Conta corrente</option><option value="POUPANCA">Poupança</option><option value="DINHEIRO">Dinheiro</option><option value="INVESTIMENTO">Investimento</option><option value="CARTEIRA">Carteira digital</option><option value="OUTRA">Outra</option></select></label>
+<label>Responsável<select name="accountPerson" [(ngModel)]="accountForm.person_id"><option [ngValue]="null">Compartilhada / não informado</option><option *ngFor="let p of people" [ngValue]="p.id">{{p.name}}</option></select></label><label>Saldo inicial (R$)<input name="initialBalance" type="number" step="0.01" [(ngModel)]="accountForm.initial_balance" required></label><label>Data do saldo inicial<input name="balanceDate" type="date" [(ngModel)]="accountForm.balance_date" required></label><label>Observações<input name="accountNotes" [(ngModel)]="accountForm.notes"></label><label>Ativa<select name="active" [(ngModel)]="accountForm.active"><option [ngValue]="true">Sim</option><option [ngValue]="false">Não</option></select></label>
+<div class="form-actions"><button [disabled]="saving || !accountForm.name.trim()">{{saving?'Salvando…':editingAccountId?'Salvar alterações':'Cadastrar conta'}}</button><button type="button" class="secondary" *ngIf="editingAccountId" (click)="resetAccount()">Cancelar</button></div></form></section>
+<section class="panel list-panel"><div class="panel-head"><div><h2>Contas cadastradas</h2><p class="muted">Saldo atual calculado com lançamentos e transferências realizados.</p></div></div><div class="table-wrap"><table><thead><tr><th>Conta</th><th>Tipo</th><th>Responsável</th><th>Saldo inicial</th><th>Saldo atual</th><th></th></tr></thead><tbody><tr *ngFor="let a of accounts"><td>{{a.name}}</td><td>{{a.account_type}}</td><td>{{personName(a.person_id)}}</td><td>{{a.initial_balance | currency:'BRL':'symbol':'1.2-2':'pt-BR'}}</td><td class="right">{{a.balance | currency:'BRL':'symbol':'1.2-2':'pt-BR'}}</td><td><button class="link-button" (click)="editAccount(a)">Editar</button></td></tr><tr *ngIf="!accounts.length"><td colspan="6" class="empty">Nenhuma conta cadastrada.</td></tr></tbody></table></div></section>
+<section class="panel entry-panel"><div class="panel-head"><div><h2>Nova transferência</h2><p class="muted">Transfira valores entre contas sem gerar receita ou despesa.</p></div></div><form class="entry-form" (ngSubmit)="addTransfer()"><label>Data<input name="transferDate" type="date" [(ngModel)]="transferForm.movement_date" required></label><label>Conta de origem<select name="fromAccount" [(ngModel)]="transferForm.from_account_id" required><option [ngValue]="null">Selecione</option><option *ngFor="let a of accounts" [ngValue]="a.id">{{a.name}}</option></select></label><label>Conta de destino<select name="toAccount" [(ngModel)]="transferForm.to_account_id" required><option [ngValue]="null">Selecione</option><option *ngFor="let a of accounts" [ngValue]="a.id">{{a.name}}</option></select></label><label>Valor (R$)<input name="transferAmount" type="number" min="0.01" step="0.01" [(ngModel)]="transferForm.amount" required></label><label>Descrição<input name="transferDescription" [(ngModel)]="transferForm.description" required minlength="2"></label><label>Status<select name="transferStatus" [(ngModel)]="transferForm.status"><option value="REALIZADO">Realizado</option><option value="PREVISTO">Previsto</option></select></label><div class="form-actions"><button [disabled]="saving || !canTransfer">Registrar transferência</button></div></form>
+<div class="table-wrap transfer-table"><table><thead><tr><th>Data</th><th>Origem</th><th>Destino</th><th>Descrição</th><th>Status</th><th class="right">Valor</th></tr></thead><tbody><tr *ngFor="let t of transfers"><td>{{t.movement_date | date:'dd/MM/yyyy':'UTC'}}</td><td>{{accountName(t.from_account_id)}}</td><td>{{accountName(t.to_account_id)}}</td><td>{{t.description}}</td><td>{{statusLabel(t.status)}}</td><td class="right">{{t.amount | currency:'BRL':'symbol':'1.2-2':'pt-BR'}}</td></tr><tr *ngIf="!transfers.length"><td colspan="6" class="empty">Nenhuma transferência cadastrada.</td></tr></tbody></table></div></section></ng-container>
+<footer>Dados armazenados no servidor local · API FastAPI</footer></main></div>
 ` })
 export class AppComponent implements OnInit {
-  private http = inject(HttpClient);
-  categories: Category[] = []; groups: Group[] = []; subgroups: Subgroup[] = []; people: Person[] = []; accounts: Account[] = []; entries: Entry[] = [];
-  selectedCategoryId: number | null = null; selectedGroupId: number | null = null;
-  saving = false; message = '';
-  form = { movement_date: today(), competence_date: today(), entry_type: 'DESPESA', description: '', amount: null as number | null, person_id: null as number | null, account_id: null as number | null, subgroup_id: null as number | null, status: 'REALIZADO' };
-  get availableCategories() { return this.categories.filter(c => c.active && (c.nature === 'MISTA' || c.nature === this.form.entry_type)); }
-  get availableGroups() { return this.groups.filter(g => g.active && g.category_id === this.selectedCategoryId); }
-  get availableSubgroups() { return this.subgroups.filter(s => s.active && s.group_id === this.selectedGroupId); }
-  get canSave() { return !!this.form.description.trim() && !!this.form.amount && this.form.amount > 0 && !!this.form.account_id; }
-  ngOnInit() { this.loadAll(); }
-  onTypeChange() {
-    if (!this.availableCategories.some(category => category.id === this.selectedCategoryId)) {
-      this.selectedCategoryId = null;
-      this.onCategoryChange();
-    }
-  }
-  loadAll() {
-    this.http.get<Category[]>('/api/categories').subscribe({next: v => this.categories = v, error: () => this.message = 'Não foi possível carregar categorias.'});
-    this.http.get<Group[]>('/api/groups').subscribe({next: v => this.groups = v});
-    this.http.get<Subgroup[]>('/api/subgroups').subscribe({next: v => this.subgroups = v});
-    this.http.get<Person[]>('/api/people').subscribe({next: v => this.people = v});
-    this.http.get<Account[]>('/api/accounts').subscribe({next: v => this.accounts = v, error: () => this.message = 'Não foi possível carregar contas.'});
-    this.loadEntries();
-  }
-  loadEntries() { this.http.get<Entry[]>('/api/entries').subscribe({next: v => this.entries = v, error: () => this.message = 'Não foi possível carregar os lançamentos.'}); }
-  onCategoryChange() { this.selectedGroupId = null; this.form.subgroup_id = null; }
-  onGroupChange() { this.form.subgroup_id = null; }
-  addEntry() {
-    if (!this.canSave) return;
-    this.saving = true; this.message = '';
-    const payload = {...this.form, amount: Number(this.form.amount), subgroup_id: this.form.subgroup_id};
-    this.http.post<Entry>('/api/entries', payload).subscribe({
-      next: item => { this.entries = [item, ...this.entries]; this.form.description = ''; this.form.amount = null; this.selectedCategoryId = null; this.selectedGroupId = null; this.form.subgroup_id = null; this.message = 'Lançamento cadastrado com sucesso.'; this.saving = false; },
-      error: err => { this.message = err.error?.detail || 'Falha ao cadastrar lançamento. Verifique os cadastros e tente novamente.'; this.saving = false; }
-    });
-  }
-  cancelEntry(entry: Entry) {
-    if (!confirm(`Cancelar o lançamento '${entry.description}'?`)) return;
-    this.http.patch<Entry>(`/api/entries/${entry.id}/status`, {status: 'CANCELADO'}).subscribe({next: updated => { this.entries = this.entries.map(e => e.id === updated.id ? updated : e); this.message = 'Lançamento cancelado.'; }, error: () => this.message = 'Não foi possível cancelar o lançamento.'});
-  }
-  accountName(id: number) { return this.accounts.find(a => a.id === id)?.name || `Conta #${id}`; }
-  typeLabel(type: string) { return type === 'RECEITA' ? 'Receita' : type === 'INVESTIMENTO' ? 'Investimento' : 'Despesa'; }
+ private http=inject(HttpClient); view:'entries'|'accounts'='entries'; categories:Category[]=[];groups:Group[]=[];subgroups:Subgroup[]=[];people:Person[]=[];accounts:Account[]=[];entries:Entry[]=[];transfers:Transfer[]=[];
+ selectedCategoryId:number|null=null;selectedGroupId:number|null=null;editingId:number|null=null;editingAccountId:number|null=null;saving=false;message='';
+ form={movement_date:today(),competence_date:today(),entry_type:'DESPESA',description:'',amount:null as number|null,person_id:null as number|null,account_id:null as number|null,subgroup_id:null as number|null,status:'REALIZADO'};
+ accountForm={name:'',account_type:'CORRENTE',person_id:null as number|null,initial_balance:0,balance_date:today(),active:true,notes:''};
+ transferForm={movement_date:today(),from_account_id:null as number|null,to_account_id:null as number|null,amount:null as number|null,status:'REALIZADO',description:'Transferência entre contas'};
+ get availableCategories(){return this.categories.filter(c=>c.active&&(c.nature==='MISTA'||c.nature===this.form.entry_type));}get availableGroups(){return this.groups.filter(g=>g.active&&g.category_id===this.selectedCategoryId);}get availableSubgroups(){return this.subgroups.filter(s=>s.active&&s.group_id===this.selectedGroupId);}
+ get canSave(){return !!this.form.description.trim()&&!!this.form.amount&&this.form.amount>0&&!!this.form.account_id;}get canTransfer(){return !!this.transferForm.from_account_id&&!!this.transferForm.to_account_id&&this.transferForm.from_account_id!==this.transferForm.to_account_id&&!!this.transferForm.amount&&this.transferForm.amount>0&&this.transferForm.description.trim().length>=2;}get activeAccountCount(){return this.accounts.filter(account=>account.active).length;}
+ ngOnInit(){this.loadAll();}loadAll(){this.http.get<Category[]>('/api/categories').subscribe(v=>this.categories=v);this.http.get<Group[]>('/api/groups').subscribe(v=>this.groups=v);this.http.get<Subgroup[]>('/api/subgroups').subscribe(v=>this.subgroups=v);this.http.get<Person[]>('/api/people').subscribe(v=>this.people=v);this.loadAccounts();this.loadEntries();this.loadTransfers();}
+ loadAccounts(){this.http.get<Account[]>('/api/accounts/summary').subscribe({next:v=>this.accounts=v,error:()=>this.message='Não foi possível carregar as contas.'});}loadEntries(){this.http.get<Entry[]>('/api/entries').subscribe({next:v=>this.entries=v,error:()=>this.message='Não foi possível carregar os lançamentos.'});}loadTransfers(){this.http.get<Transfer[]>('/api/transfers').subscribe(v=>this.transfers=v);}
+ onTypeChange(){if(!this.availableCategories.some(category=>category.id===this.selectedCategoryId)){this.selectedCategoryId=null;this.onCategoryChange();}}
+ onCategoryChange(){this.selectedGroupId=null;this.form.subgroup_id=null;}onGroupChange(){this.form.subgroup_id=null;}
+ saveEntry(){if(!this.canSave)return;this.saving=true;const payload={...this.form,amount:Number(this.form.amount)};const req=this.editingId?this.http.put<Entry>(`/api/entries/${this.editingId}`,payload):this.http.post<Entry>('/api/entries',payload);req.subscribe({next:()=>{this.message=this.editingId?'Lançamento atualizado.':'Lançamento cadastrado.';this.resetEntry();this.loadEntries();this.loadAccounts();this.saving=false;},error:e=>{this.message=e.error?.detail||'Falha ao salvar lançamento.';this.saving=false;}});}
+ editEntry(e:Entry){this.editingId=e.id;this.form={movement_date:e.movement_date,competence_date:e.competence_date,entry_type:e.entry_type,description:e.description,amount:Number(e.amount),person_id:e.person_id,account_id:e.account_id,subgroup_id:e.subgroup_id,status:e.status};const sub=this.subgroups.find(s=>s.id===e.subgroup_id);const group=this.groups.find(g=>g.id===sub?.group_id);this.selectedCategoryId=group?.category_id??null;this.selectedGroupId=group?.id??null;window.scrollTo({top:0,behavior:'smooth'});}
+ resetEntry(){this.editingId=null;this.form={movement_date:today(),competence_date:today(),entry_type:'DESPESA',description:'',amount:null,person_id:null,account_id:null,subgroup_id:null,status:'REALIZADO'};this.selectedCategoryId=null;this.selectedGroupId=null;}
+ cancelEntry(e:Entry){if(!confirm(`Cancelar o lançamento '${e.description}'?`))return;this.http.patch(`/api/entries/${e.id}/status`,{status:'CANCELADO'}).subscribe({next:()=>{this.message='Lançamento cancelado.';this.loadEntries();this.loadAccounts();},error:()=>this.message='Não foi possível cancelar o lançamento.'});}
+ saveAccount(){if(!this.accountForm.name.trim())return;this.saving=true;const payload={...this.accountForm,initial_balance:Number(this.accountForm.initial_balance)};const req=this.editingAccountId?this.http.put(`/api/accounts/${this.editingAccountId}`,payload):this.http.post('/api/accounts',payload);req.subscribe({next:()=>{this.message=this.editingAccountId?'Conta atualizada.':'Conta cadastrada.';this.resetAccount();this.loadAccounts();this.saving=false;},error:e=>{this.message=e.error?.detail||'Não foi possível salvar a conta.';this.saving=false;}});}
+ editAccount(a:Account){this.editingAccountId=a.id;this.accountForm={name:a.name,account_type:a.account_type,person_id:a.person_id,initial_balance:Number(a.initial_balance),balance_date:a.balance_date,active:a.active,notes:a.notes||''};}
+ resetAccount(){this.editingAccountId=null;this.accountForm={name:'',account_type:'CORRENTE',person_id:null,initial_balance:0,balance_date:today(),active:true,notes:''};}
+ addTransfer(){if(!this.canTransfer)return;this.saving=true;this.http.post('/api/transfers',{...this.transferForm,amount:Number(this.transferForm.amount)}).subscribe({next:()=>{this.message='Transferência registrada.';this.transferForm={movement_date:today(),from_account_id:null,to_account_id:null,amount:null,status:'REALIZADO',description:'Transferência entre contas'};this.loadTransfers();this.loadAccounts();this.saving=false;},error:e=>{this.message=e.error?.detail||'Não foi possível registrar a transferência.';this.saving=false;}});}
+ accountName(id:number){return this.accounts.find(a=>a.id===id)?.name||`Conta #${id}`;}personName(id:number|null){return id?this.people.find(p=>p.id===id)?.name||'—':'Compartilhada';}totalBalance(){return this.accounts.reduce((sum,a)=>sum+Number(a.balance||0),0);}typeLabel(t:string){return t==='RECEITA'?'Receita':t==='INVESTIMENTO'?'Investimento':'Despesa';}statusLabel(s:string){return s==='PREVISTO'?'Previsto':s==='CANCELADO'?'Cancelado':'Realizado';}
 }

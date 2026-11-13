@@ -101,6 +101,31 @@ def transfers_create(payload: TransferIn, db: Session = Depends(get_db)):
         if not db.get(FinancialAccount, account_id): raise HTTPException(404, f"Conta financeira {account_id} não encontrada.")
     return create_item(db, AccountTransfer, payload)
 
+
+@router.put("/accounts/{account_id}", response_model=AccountOut)
+def accounts_update(account_id: int, payload: AccountIn, db: Session = Depends(get_db)):
+    item = db.get(FinancialAccount, account_id)
+    if not item: raise HTTPException(404, "Conta financeira não encontrada.")
+    if payload.person_id is not None and not db.get(Person, payload.person_id): raise HTTPException(404, "Pessoa não encontrada.")
+    for key, value in payload.model_dump().items(): setattr(item, key, value)
+    try:
+        db.commit(); db.refresh(item)
+    except IntegrityError:
+        db.rollback(); raise HTTPException(409, "Não foi possível atualizar a conta.")
+    return item
+
+@router.get("/accounts/summary")
+def accounts_summary(db: Session = Depends(get_db)):
+    accounts = list(db.scalars(select(FinancialAccount).order_by(FinancialAccount.id)).all())
+    result = []
+    for account in accounts:
+        income = db.scalar(select(func.coalesce(func.sum(FinancialEntry.amount), 0)).where(FinancialEntry.account_id == account.id, FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type == "RECEITA", FinancialEntry.movement_date >= account.balance_date)) or Decimal("0")
+        expenses = db.scalar(select(func.coalesce(func.sum(FinancialEntry.amount), 0)).where(FinancialEntry.account_id == account.id, FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type.in_(["DESPESA", "INVESTIMENTO"]), FinancialEntry.movement_date >= account.balance_date)) or Decimal("0")
+        sent = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount), 0)).where(AccountTransfer.from_account_id == account.id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
+        received = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount), 0)).where(AccountTransfer.to_account_id == account.id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
+        result.append({"id": account.id, "name": account.name, "account_type": account.account_type, "person_id": account.person_id, "initial_balance": account.initial_balance, "balance_date": account.balance_date, "active": account.active, "balance": account.initial_balance + income + received - expenses - sent})
+    return result
+
 @router.get("/accounts/{account_id}/balance")
 def account_balance(account_id: int, db: Session = Depends(get_db)):
     account = db.get(FinancialAccount, account_id)
@@ -137,4 +162,19 @@ def entries_update(entry_id: int, payload: EntryIn, db: Session = Depends(get_db
         db.commit(); db.refresh(item)
     except IntegrityError:
         db.rollback(); raise HTTPException(409, "Não foi possível atualizar o lançamento.")
+    return item
+
+
+@router.put("/transfers/{transfer_id}", response_model=TransferOut)
+def transfers_update(transfer_id: int, payload: TransferIn, db: Session = Depends(get_db)):
+    item = db.get(AccountTransfer, transfer_id)
+    if not item: raise HTTPException(404, "Transferência não encontrada.")
+    if payload.from_account_id == payload.to_account_id: raise HTTPException(422, "A conta de origem e destino devem ser diferentes.")
+    for account_id in (payload.from_account_id, payload.to_account_id):
+        if not db.get(FinancialAccount, account_id): raise HTTPException(404, f"Conta financeira {account_id} não encontrada.")
+    for key, value in payload.model_dump().items(): setattr(item, key, value)
+    try:
+        db.commit(); db.refresh(item)
+    except IntegrityError:
+        db.rollback(); raise HTTPException(409, "Não foi possível atualizar a transferência.")
     return item

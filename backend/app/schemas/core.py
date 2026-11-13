@@ -43,3 +43,33 @@ class AccountIn(BaseModel):
     notes: str | None = None
 class AccountOut(AccountIn, ORMModel):
     id: int
+
+class EntryIn(BaseModel):
+    movement_date: date
+    competence_date: date
+    entry_type: str = Field(pattern="^(RECEITA|DESPESA|INVESTIMENTO)$")
+    description: str = Field(min_length=2, max_length=180)
+    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    person_id: int | None = None
+    account_id: int
+    subgroup_id: int | None = None
+    payment_method_id: int | None = None
+    status: str = Field(default="REALIZADO", pattern="^(PREVISTO|REALIZADO|CANCELADO)$")
+    notes: str | None = None
+
+class EntryOut(EntryIn, ORMModel):
+    id: int
+
+class TransferIn(BaseModel):
+    movement_date: date
+    from_account_id: int
+    to_account_id: int
+    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    status: str = Field(default="REALIZADO", pattern="^(PREVISTO|REALIZADO|CANCELADO)$")
+    description: str = Field(default="Transferência entre contas", min_length=2, max_length=180)
+
+class TransferOut(TransferIn, ORMModel):
+    id: int
+
+class EntryStatusIn(BaseModel):
+    status: str = Field(pattern="^(PREVISTO|REALIZADO|CANCELADO)$")

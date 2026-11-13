@@ -73,3 +73,19 @@ A API disponibiliza CRUD para pessoas, categorias, grupos, subgrupos e contas. A
 4. Implementar orçamento mensal e previsto x realizado.
 5. Implementar cartões, faturas e parcelamentos.
 6. Implementar backup automatizado com teste de restauração.
+
+## Módulo de lançamentos (versão 0.2.0)
+
+A versão seguinte acrescenta:
+- Receitas, despesas e investimentos com data de movimentação e competência.
+- Vínculo opcional com pessoa, subgrupo e meio de pagamento; conta financeira obrigatória.
+- Status `PREVISTO`, `REALIZADO` e `CANCELADO`. Apenas `REALIZADO` afeta o saldo.
+- Transferências entre contas em tabela própria, sem classificá-las como receita ou despesa.
+- Consulta de saldo por conta em `GET /api/accounts/{id}/balance`.
+- Listagem e cadastro em `GET/POST /api/entries` e `GET/POST /api/transfers`.
+
+A tela inicial agora permite cadastrar e listar receitas, despesas e investimentos. A seleção de grupo e subgrupo depende da categoria escolhida. O cancelamento está disponível na listagem e a API já permite atualizar um lançamento por `PUT /api/entries/{id}`. A tela para cadastrar transferências e a edição visual dos lançamentos ainda serão implementadas nas próximas etapas.
+
+**Regra para saldo inicial:** `balance_date` é a data de abertura do saldo informado. O cálculo soma movimentações realizadas a partir dessa data, incluindo a própria data. Movimentações anteriores à data de abertura não alteram o saldo calculado.
+
+**Observação:** esta versão ainda usa `Base.metadata.create_all` na inicialização para criar tabelas ausentes. Antes de uma utilização continuada com dados importantes, vamos criar e validar uma migration Alembic inicial e configurar backup automatizado.

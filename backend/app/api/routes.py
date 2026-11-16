@@ -283,3 +283,60 @@ def budgets_summary(budget_id: int, db: Session = Depends(get_db)):
             "total_planned": total_planned, "total_realized": total_realized,
             "total_remaining": total_planned - total_realized,
             "items": rows}
+
+# Indicadores consolidados para o painel inicial.
+from datetime import date, timedelta
+from calendar import monthrange
+from app.models import Group, Subgroup
+
+@router.get("/dashboard/summary")
+def dashboard_summary(reference_month: date | None = None, db: Session = Depends(get_db)):
+    ref = reference_month or date.today().replace(day=1)
+    start = ref.replace(day=1)
+    end = ref.replace(day=monthrange(ref.year, ref.month)[1])
+    totals = {"RECEITA": Decimal("0.00"), "DESPESA": Decimal("0.00"), "INVESTIMENTO": Decimal("0.00")}
+    for kind, amount in db.execute(select(FinancialEntry.entry_type, func.coalesce(func.sum(FinancialEntry.amount), 0)).where(
+        FinancialEntry.competence_date >= start, FinancialEntry.competence_date <= end,
+        FinancialEntry.status == "REALIZADO").group_by(FinancialEntry.entry_type)).all():
+        totals[kind] = Decimal(str(amount))
+
+    category_rows = db.execute(
+        select(Category.id, Category.name, func.coalesce(func.sum(FinancialEntry.amount), 0))
+        .join(Group, Group.category_id == Category.id)
+        .join(Subgroup, Subgroup.group_id == Group.id)
+        .join(FinancialEntry, FinancialEntry.subgroup_id == Subgroup.id)
+        .where(FinancialEntry.competence_date >= start, FinancialEntry.competence_date <= end,
+               FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type == "DESPESA")
+        .group_by(Category.id, Category.name).order_by(func.sum(FinancialEntry.amount).desc()).limit(6)
+    ).all()
+
+    recent = db.scalars(select(FinancialEntry).order_by(FinancialEntry.movement_date.desc(), FinancialEntry.id.desc()).limit(8)).all()
+    recent_items = [{"id": e.id, "date": e.movement_date.isoformat(), "description": e.description,
+                     "entry_type": e.entry_type, "status": e.status, "amount": str(e.amount)} for e in recent]
+
+    flow = []
+    cursor = start
+    for _ in range(6):
+        month_start = cursor.replace(day=1)
+        month_end = month_start.replace(day=monthrange(month_start.year, month_start.month)[1])
+        vals = {"RECEITA": Decimal("0.00"), "DESPESA": Decimal("0.00")}
+        for kind, amount in db.execute(select(FinancialEntry.entry_type, func.coalesce(func.sum(FinancialEntry.amount), 0)).where(
+            FinancialEntry.competence_date >= month_start, FinancialEntry.competence_date <= month_end,
+            FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type.in_(["RECEITA", "DESPESA"])
+        ).group_by(FinancialEntry.entry_type)).all(): vals[kind] = Decimal(str(amount))
+        flow.append({"month": month_start.isoformat(), "income": str(vals["RECEITA"]), "expenses": str(vals["DESPESA"])})
+        previous = month_start - timedelta(days=1)
+        cursor = previous.replace(day=1)
+    flow.reverse()
+
+    budget = db.scalar(select(Budget).where(Budget.reference_month == start))
+    budget_total = None
+    if budget:
+        from app.models import BudgetItem
+        budget_total = str(db.scalar(select(func.coalesce(func.sum(BudgetItem.planned_amount), 0)).where(BudgetItem.budget_id == budget.id)))
+
+    return {"reference_month": start.isoformat(), "income": str(totals["RECEITA"]),
+            "expenses": str(totals["DESPESA"]), "investments": str(totals["INVESTIMENTO"]),
+            "net_result": str(totals["RECEITA"] - totals["DESPESA"] - totals["INVESTIMENTO"]),
+            "expense_categories": [{"category_id": r[0], "category_name": r[1], "amount": str(r[2])} for r in category_rows],
+            "recent_entries": recent_items, "monthly_flow": flow, "budget_planned": budget_total}

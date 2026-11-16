@@ -136,4 +136,14 @@ A data `reference_month` deve ser sempre o primeiro dia do mês (ex.: `2026-11-0
 
 ### Validação desta versão
 
-Foram executados `compileall` no backend, testes da API com SQLite em memória (incluindo resumo, atualização de itens, exclusão e rejeição de orçamento duplicado) e a compilação Angular. O build e a execução via Docker ainda não foram validados nesta entrega.
+Foram executados `compileall` no backend e testes da API com SQLite em memória/arquivo temporário: criação de categoria, criação de orçamento com item, consulta do resumo e rejeição de orçamento duplicado para o mesmo mês. A tentativa de instalar dependências npm excedeu o tempo disponível; portanto, a compilação Angular e o build/execução Docker ainda não foram validados nesta entrega.
+
+## Versão 0.5.0 — Dashboard financeiro
+
+A tela inicial apresenta um resumo mensal das receitas, despesas e investimentos realizados, resultado líquido, maiores despesas classificadas por categoria, fluxo de receitas/despesas dos últimos seis meses e lançamentos recentes. O mês de referência pode ser alterado na própria tela.
+
+Endpoint adicional: `GET /api/dashboard/summary?reference_month=YYYY-MM-01`.
+
+Os indicadores mensais usam a data de competência e consideram somente lançamentos com status `REALIZADO`. Transferências entre contas não entram como receita ou despesa. A lista de movimentações recentes exibe os últimos lançamentos independentemente do mês selecionado.
+
+A compilação Angular e a execução integrada com PostgreSQL/Docker precisam ser verificadas no ambiente de desenvolvimento: nesta geração, a instalação das dependências npm excedeu o tempo disponível.

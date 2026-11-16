@@ -122,7 +122,7 @@ def accounts_summary(db: Session = Depends(get_db)):
         income = db.scalar(select(func.coalesce(func.sum(FinancialEntry.amount), 0)).where(FinancialEntry.account_id == account.id, FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type == "RECEITA", FinancialEntry.movement_date >= account.balance_date)) or Decimal("0")
         expenses = db.scalar(select(func.coalesce(func.sum(FinancialEntry.amount), 0)).where(FinancialEntry.account_id == account.id, FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type.in_(["DESPESA", "INVESTIMENTO"]), FinancialEntry.movement_date >= account.balance_date)) or Decimal("0")
         sent = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount), 0)).where(AccountTransfer.from_account_id == account.id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
-        received = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount), 0)).where(AccountTransfer.to_account_id == account.id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
+        received = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount),  0)).where(AccountTransfer.to_account_id == account.id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
         card_paid = db.scalar(select(func.coalesce(func.sum(CardPayment.amount), 0)).where(CardPayment.account_id == account.id, CardPayment.payment_date >= account.balance_date)) or Decimal("0")
         result.append({"id": account.id, "name": account.name, "account_type": account.account_type, "person_id": account.person_id, "initial_balance": account.initial_balance, "balance_date": account.balance_date, "active": account.active, "balance": account.initial_balance + income + received - expenses - sent - card_paid})
     return result
@@ -237,7 +237,6 @@ def budgets_update(budget_id: int, payload: BudgetIn, db: Session = Depends(get_
     items = data.pop("items")
     for key, value in data.items(): setattr(budget, key, value)
     budget.items.clear()
-    db.flush()
     budget.items.extend(BudgetItem(**item) for item in items)
     try:
         db.commit(); db.refresh(budget)
@@ -377,6 +376,49 @@ def _month_add(value: date, offset: int) -> date:
 def _invoice_month(purchase_date: date, closing_day: int) -> date:
     return _month_add(purchase_date.replace(day=1), 0 if purchase_date.day <= closing_day else 1)
 
+def _card_outstanding(card_id: int, db: Session, exclude_purchase_id: int | None = None) -> Decimal:
+    stmt = select(func.coalesce(func.sum(CardInstallment.amount), 0)).join(CardPurchase, CardInstallment.purchase_id == CardPurchase.id).where(CardPurchase.card_id == card_id)
+    if exclude_purchase_id is not None:
+        stmt = stmt.where(CardPurchase.id != exclude_purchase_id)
+    total = db.scalar(stmt) or Decimal("0.00")
+    payments = db.scalar(select(func.coalesce(func.sum(CardPayment.amount), 0)).where(CardPayment.card_id == card_id)) or Decimal("0.00")
+    return max(Decimal("0.00"), total - payments)
+
+def _make_installments(purchase: CardPurchase, card: CreditCard, db: Session):
+    total_cents = int(purchase.total_amount * 100)
+    base_cents, remainder = divmod(total_cents, purchase.installments_count)
+    amounts = [Decimal(base_cents + int(idx < remainder)) / 100 for idx in range(purchase.installments_count)]
+    first_month = _invoice_month(purchase.purchase_date, card.closing_day)
+    for idx, amount in enumerate(amounts, 1):
+        db.add(CardInstallment(purchase_id=purchase.id, installment_number=idx, invoice_month=_month_add(first_month, idx-1), amount=amount))
+
+def _validate_purchase_category(subgroup_id: int | None, db: Session):
+    if subgroup_id is None:
+        return
+    subgroup = db.get(Subgroup, subgroup_id)
+    if not subgroup:
+        raise HTTPException(404, "Subgrupo não encontrado.")
+    group = db.get(Group, subgroup.group_id)
+    category = db.get(Category, group.category_id)
+    if category.nature not in ("MISTA", "DESPESA"):
+        raise HTTPException(422, "A categoria do cartão deve aceitar despesas.")
+
+def _ensure_purchase_editable(purchase: CardPurchase, db: Session):
+    months = list(db.scalars(select(CardInstallment.invoice_month).where(CardInstallment.purchase_id == purchase.id)).all())
+    if months:
+        paid = db.scalar(select(func.count(CardPayment.id)).where(CardPayment.card_id == purchase.card_id, CardPayment.invoice_month.in_(months))) or 0
+        if paid:
+            raise HTTPException(409, "Não é possível editar ou excluir esta compra: existe pagamento registrado em uma de suas faturas. Ajuste os pagamentos primeiro.")
+
+@router.get("/credit-cards/summary")
+def credit_cards_summary(db: Session = Depends(get_db)):
+    result = []
+    for card in db.scalars(select(CreditCard).order_by(CreditCard.name)).all():
+        used = _card_outstanding(card.id, db)
+        available = card.credit_limit - used
+        result.append({"card_id": card.id, "name": card.name, "credit_limit": str(card.credit_limit), "used": str(used), "available": str(available), "usage_percentage": round(float(used / card.credit_limit * 100), 2)})
+    return result
+
 @router.get("/credit-cards", response_model=list[CreditCardOut])
 def credit_cards_list(db: Session = Depends(get_db)):
     return list(db.scalars(select(CreditCard).order_by(CreditCard.name)).all())
@@ -389,8 +431,14 @@ def credit_cards_create(payload: CreditCardIn, db: Session = Depends(get_db)):
 def credit_cards_update(card_id: int, payload: CreditCardIn, db: Session = Depends(get_db)):
     card = db.get(CreditCard, card_id)
     if not card: raise HTTPException(404, "Cartão não encontrado.")
+    if _card_outstanding(card.id, db) > payload.credit_limit:
+        raise HTTPException(422, "O limite informado é menor que o valor atualmente utilizado no cartão.")
     for key, value in payload.model_dump().items(): setattr(card, key, value)
     db.commit(); db.refresh(card); return card
+
+@router.get("/card-purchases", response_model=list[CardPurchaseOut])
+def card_purchases_list(db: Session = Depends(get_db)):
+    return list(db.scalars(select(CardPurchase).order_by(CardPurchase.purchase_date.desc(), CardPurchase.id.desc())).all())
 
 @router.get("/credit-cards/{card_id}/purchases", response_model=list[CardPurchaseOut])
 def credit_card_purchases(card_id: int, db: Session = Depends(get_db)):
@@ -401,24 +449,46 @@ def credit_card_purchases(card_id: int, db: Session = Depends(get_db)):
 def card_purchase_create(payload: CardPurchaseIn, db: Session = Depends(get_db)):
     card = db.get(CreditCard, payload.card_id)
     if not card: raise HTTPException(404, "Cartão não encontrado.")
-    if payload.subgroup_id is not None:
-        subgroup = db.get(Subgroup, payload.subgroup_id)
-        if not subgroup: raise HTTPException(404, "Subgrupo não encontrado.")
-        category = db.get(Category, db.get(Group, subgroup.group_id).category_id)
-        if category.nature not in ("MISTA", "DESPESA"):
-            raise HTTPException(422, "A categoria do cartão deve aceitar despesas.")
+    _validate_purchase_category(payload.subgroup_id, db)
     if payload.person_id is not None and not db.get(Person, payload.person_id): raise HTTPException(404, "Pessoa não encontrada.")
-    total_cents = int(payload.total_amount * 100)
-    if total_cents < payload.installments_count:
+    if int(payload.total_amount * 100) < payload.installments_count:
         raise HTTPException(422, "O valor total deve cobrir pelo menos R$ 0,01 por parcela.")
+    if _card_outstanding(card.id, db) + payload.total_amount > card.credit_limit:
+        raise HTTPException(422, "A compra ultrapassa o limite disponível do cartão.")
     purchase = CardPurchase(**payload.model_dump())
     db.add(purchase); db.flush()
-    base_cents, remainder = divmod(total_cents, payload.installments_count)
-    amounts = [Decimal(base_cents + int(idx < remainder)) / 100 for idx in range(payload.installments_count)]
-    first_month = _invoice_month(payload.purchase_date, card.closing_day)
-    for idx, amount in enumerate(amounts, 1):
-        db.add(CardInstallment(purchase_id=purchase.id, installment_number=idx, invoice_month=_month_add(first_month, idx-1), amount=amount))
+    _make_installments(purchase, card, db)
     db.commit(); db.refresh(purchase); return purchase
+
+@router.put("/card-purchases/{purchase_id}", response_model=CardPurchaseOut)
+def card_purchase_update(purchase_id: int, payload: CardPurchaseIn, db: Session = Depends(get_db)):
+    purchase = db.get(CardPurchase, purchase_id)
+    if not purchase: raise HTTPException(404, "Compra não encontrada.")
+    _ensure_purchase_editable(purchase, db)
+    card = db.get(CreditCard, payload.card_id)
+    if not card: raise HTTPException(404, "Cartão não encontrado.")
+    _validate_purchase_category(payload.subgroup_id, db)
+    if payload.person_id is not None and not db.get(Person, payload.person_id): raise HTTPException(404, "Pessoa não encontrada.")
+    if int(payload.total_amount * 100) < payload.installments_count:
+        raise HTTPException(422, "O valor total deve cobrir pelo menos R$ 0,01 por parcela.")
+    if _card_outstanding(card.id, db, exclude_purchase_id=purchase.id) + payload.total_amount > card.credit_limit:
+        raise HTTPException(422, "A compra ultrapassa o limite disponível do cartão.")
+    new_first_month = _invoice_month(payload.purchase_date, card.closing_day)
+    new_months = [_month_add(new_first_month, offset) for offset in range(payload.installments_count)]
+    paid_new_months = db.scalar(select(func.count(CardPayment.id)).where(CardPayment.card_id == card.id, CardPayment.invoice_month.in_(new_months))) or 0
+    if paid_new_months:
+        raise HTTPException(409, "Não é possível mover a compra para uma fatura que já possui pagamento registrado.")
+    for key, value in payload.model_dump().items(): setattr(purchase, key, value)
+    db.query(CardInstallment).filter(CardInstallment.purchase_id == purchase.id).delete(synchronize_session=False)
+    db.flush(); _make_installments(purchase, card, db)
+    db.commit(); db.refresh(purchase); return purchase
+
+@router.delete("/card-purchases/{purchase_id}", status_code=204)
+def card_purchase_delete(purchase_id: int, db: Session = Depends(get_db)):
+    purchase = db.get(CardPurchase, purchase_id)
+    if not purchase: raise HTTPException(404, "Compra não encontrada.")
+    _ensure_purchase_editable(purchase, db)
+    db.delete(purchase); db.commit()
 
 @router.get("/invoices")
 def invoices_list(card_id: int | None = None, reference_month: date | None = None, db: Session = Depends(get_db)):
@@ -439,13 +509,34 @@ def invoices_list(card_id: int | None = None, reference_month: date | None = Non
 
 @router.post("/card-payments", response_model=CardPaymentOut, status_code=201)
 def card_payment_create(payload: CardPaymentIn, db: Session = Depends(get_db)):
+    _validate_card_payment(payload, db)
+    payment = CardPayment(**payload.model_dump()); db.add(payment); db.commit(); db.refresh(payment); return payment
+
+@router.get("/card-payments", response_model=list[CardPaymentOut])
+def card_payments_list(db: Session = Depends(get_db)):
+    return list(db.scalars(select(CardPayment).order_by(CardPayment.payment_date.desc(), CardPayment.id.desc())).all())
+
+def _validate_card_payment(payload: CardPaymentIn, db: Session, exclude_payment_id: int | None = None):
     if not db.get(CreditCard, payload.card_id): raise HTTPException(404, "Cartão não encontrado.")
-    account = db.get(FinancialAccount, payload.account_id)
-    if not account: raise HTTPException(404, "Conta financeira não encontrada.")
+    if not db.get(FinancialAccount, payload.account_id): raise HTTPException(404, "Conta financeira não encontrada.")
     if payload.invoice_month.day != 1: raise HTTPException(422, "A competência da fatura deve ser o primeiro dia do mês.")
-    invoice_month = payload.invoice_month
-    invoice_total = db.scalar(select(func.coalesce(func.sum(CardInstallment.amount), 0)).join(CardPurchase, CardInstallment.purchase_id == CardPurchase.id).where(CardPurchase.card_id == payload.card_id, CardInstallment.invoice_month == invoice_month)) or Decimal("0.00")
-    already_paid = db.scalar(select(func.coalesce(func.sum(CardPayment.amount), 0)).where(CardPayment.card_id == payload.card_id, CardPayment.invoice_month == invoice_month)) or Decimal("0.00")
+    invoice_total = db.scalar(select(func.coalesce(func.sum(CardInstallment.amount), 0)).join(CardPurchase, CardInstallment.purchase_id == CardPurchase.id).where(CardPurchase.card_id == payload.card_id, CardInstallment.invoice_month == payload.invoice_month)) or Decimal("0.00")
+    stmt = select(func.coalesce(func.sum(CardPayment.amount), 0)).where(CardPayment.card_id == payload.card_id, CardPayment.invoice_month == payload.invoice_month)
+    if exclude_payment_id is not None: stmt = stmt.where(CardPayment.id != exclude_payment_id)
+    already_paid = db.scalar(stmt) or Decimal("0.00")
     if invoice_total <= 0: raise HTTPException(404, "Não há compras para a fatura informada.")
     if payload.amount > invoice_total - already_paid: raise HTTPException(422, "O pagamento excede o saldo em aberto da fatura.")
-    payment = CardPayment(**payload.model_dump()); db.add(payment); db.commit(); db.refresh(payment); return payment
+
+@router.put("/card-payments/{payment_id}", response_model=CardPaymentOut)
+def card_payment_update(payment_id: int, payload: CardPaymentIn, db: Session = Depends(get_db)):
+    payment = db.get(CardPayment, payment_id)
+    if not payment: raise HTTPException(404, "Pagamento não encontrado.")
+    _validate_card_payment(payload, db, exclude_payment_id=payment.id)
+    for key, value in payload.model_dump().items(): setattr(payment, key, value)
+    db.commit(); db.refresh(payment); return payment
+
+@router.delete("/card-payments/{payment_id}", status_code=204)
+def card_payment_delete(payment_id: int, db: Session = Depends(get_db)):
+    payment = db.get(CardPayment, payment_id)
+    if not payment: raise HTTPException(404, "Pagamento não encontrado.")
+    db.delete(payment); db.commit()

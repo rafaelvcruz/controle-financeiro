@@ -161,3 +161,35 @@ A compilação Angular e a execução integrada com PostgreSQL/Docker precisam s
 **Convenção de competência:** a competência da fatura é o mês do ciclo de fechamento; o vencimento é calculado no mês seguinte, limitado ao último dia daquele mês. Ex.: uma compra após o fechamento em novembro vai para a competência dezembro, com vencimento no dia configurado em janeiro.
 
 **Atenção:** esta versão ainda não valida o limite disponível do cartão, não permite estorno/edição/exclusão de compras ou pagamentos e não faz conciliação automática com bancos. Configure o banco de dados com backup antes de usar dados reais.
+
+
+## Versão 0.7.0 — Gestão e validação de cartões
+
+A versão 0.7.0 complementa o módulo de cartões com controles de manutenção e limite:
+
+- Exibição do limite total, utilizado e disponível por cartão. O limite utilizado é calculado pelas parcelas ainda não pagas, incluindo parcelas futuras.
+- Bloqueio de novas compras que ultrapassem o limite disponível.
+- Bloqueio de redução do limite cadastrado para valor inferior ao que já está utilizado.
+- Edição e exclusão de compras. Para preservar a consistência, uma compra não pode ser alterada/excluída quando houver pagamento registrado em alguma fatura afetada; primeiro ajuste ou exclua o pagamento correspondente.
+- Edição e exclusão de pagamentos, com validação para impedir que a soma paga ultrapasse o total da fatura.
+- Listagens de compras e pagamentos na interface.
+- Correção do resumo de saldos das contas para descontar também pagamentos de faturas, assim como já ocorria na consulta individual do saldo.
+
+### Endpoints adicionais
+
+- `GET /api/credit-cards/summary`: limite, utilização e limite disponível por cartão.
+- `GET /api/card-purchases`: lista geral de compras.
+- `PUT /api/card-purchases/{id}` e `DELETE /api/card-purchases/{id}`: edição e exclusão de compra, respeitando pagamentos existentes.
+- `GET /api/card-payments`: lista pagamentos.
+- `PUT /api/card-payments/{id}` e `DELETE /api/card-payments/{id}`: edição e exclusão de pagamento.
+
+### Regras importantes
+
+O limite utilizado corresponde ao valor total das parcelas lançadas menos os pagamentos registrados. Assim, parcelas futuras também comprometem o limite. Pagamentos reduzem o saldo bancário e liberam limite, mas não geram uma segunda despesa. O sistema bloqueia edição/exclusão de compras que afetem faturas com pagamentos, para evitar que a fatura fique inconsistente.
+
+### Validação desta versão
+
+- `python -m compileall` no backend: aprovado.
+- Teste de integração da API com SQLite temporário: aprovado para cadastro de conta/cartão/compra, cálculo do limite, pagamento e baixa no saldo da conta, bloqueio de edição de compra com fatura paga, edição/exclusão de pagamento, edição/exclusão de compra e rejeição de compra acima do limite.
+- Integridade do ZIP: será verificada na geração do pacote.
+- Compilação Angular: aprovada com `npm run build`. A execução integrada Docker/PostgreSQL permanece pendente.

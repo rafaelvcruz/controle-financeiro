@@ -147,3 +147,17 @@ Endpoint adicional: `GET /api/dashboard/summary?reference_month=YYYY-MM-01`.
 Os indicadores mensais usam a data de competência e consideram somente lançamentos com status `REALIZADO`. Transferências entre contas não entram como receita ou despesa. A lista de movimentações recentes exibe os últimos lançamentos independentemente do mês selecionado.
 
 A compilação Angular e a execução integrada com PostgreSQL/Docker precisam ser verificadas no ambiente de desenvolvimento: nesta geração, a instalação das dependências npm excedeu o tempo disponível.
+
+
+## Cartões de crédito (v0.6.0)
+
+- Cadastro de cartões com limite, dia de fechamento e vencimento.
+- Registro de compras à vista ou parceladas em até 48 vezes.
+- Cada parcela é alocada à competência da fatura correspondente; compras após o fechamento entram na fatura seguinte.
+- Consulta de faturas por cartão/competência, com total, pagamentos e saldo em aberto.
+- Pagamento parcial ou integral vinculado a uma conta financeira. O pagamento reduz o saldo da conta e não gera uma nova despesa.
+- Compras classificadas por subgrupo são consideradas no realizado do orçamento e no total de despesas do dashboard, pela competência da fatura.
+
+**Convenção de competência:** a competência da fatura é o mês do ciclo de fechamento; o vencimento é calculado no mês seguinte, limitado ao último dia daquele mês. Ex.: uma compra após o fechamento em novembro vai para a competência dezembro, com vencimento no dia configurado em janeiro.
+
+**Atenção:** esta versão ainda não valida o limite disponível do cartão, não permite estorno/edição/exclusão de compras ou pagamentos e não faz conciliação automática com bancos. Configure o banco de dados com backup antes de usar dados reais.

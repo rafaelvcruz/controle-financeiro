@@ -123,7 +123,8 @@ def accounts_summary(db: Session = Depends(get_db)):
         expenses = db.scalar(select(func.coalesce(func.sum(FinancialEntry.amount), 0)).where(FinancialEntry.account_id == account.id, FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type.in_(["DESPESA", "INVESTIMENTO"]), FinancialEntry.movement_date >= account.balance_date)) or Decimal("0")
         sent = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount), 0)).where(AccountTransfer.from_account_id == account.id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
         received = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount), 0)).where(AccountTransfer.to_account_id == account.id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
-        result.append({"id": account.id, "name": account.name, "account_type": account.account_type, "person_id": account.person_id, "initial_balance": account.initial_balance, "balance_date": account.balance_date, "active": account.active, "balance": account.initial_balance + income + received - expenses - sent})
+        card_paid = db.scalar(select(func.coalesce(func.sum(CardPayment.amount), 0)).where(CardPayment.account_id == account.id, CardPayment.payment_date >= account.balance_date)) or Decimal("0")
+        result.append({"id": account.id, "name": account.name, "account_type": account.account_type, "person_id": account.person_id, "initial_balance": account.initial_balance, "balance_date": account.balance_date, "active": account.active, "balance": account.initial_balance + income + received - expenses - sent - card_paid})
     return result
 
 @router.get("/accounts/{account_id}/balance")
@@ -134,7 +135,8 @@ def account_balance(account_id: int, db: Session = Depends(get_db)):
     expenses = db.scalar(select(func.coalesce(func.sum(FinancialEntry.amount), 0)).where(FinancialEntry.account_id == account_id, FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type.in_(["DESPESA", "INVESTIMENTO"]), FinancialEntry.movement_date >= account.balance_date)) or Decimal("0")
     sent = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount), 0)).where(AccountTransfer.from_account_id == account_id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
     received = db.scalar(select(func.coalesce(func.sum(AccountTransfer.amount), 0)).where(AccountTransfer.to_account_id == account_id, AccountTransfer.status == "REALIZADO", AccountTransfer.movement_date >= account.balance_date)) or Decimal("0")
-    balance = account.initial_balance + income + received - expenses - sent
+    card_paid = db.scalar(select(func.coalesce(func.sum(CardPayment.amount), 0)).where(CardPayment.account_id == account_id, CardPayment.payment_date >= account.balance_date)) or Decimal("0")
+    balance = account.initial_balance + income + received - expenses - sent - card_paid
     return {"account_id": account_id, "initial_balance": account.initial_balance, "balance_date": account.balance_date, "balance": balance}
 
 @router.patch("/entries/{entry_id}/status", response_model=EntryOut)
@@ -270,6 +272,8 @@ def budgets_summary(budget_id: int, db: Session = Depends(get_db)):
                    FinancialEntry.competence_date >= start,
                    FinancialEntry.competence_date <= end)
         ) or Decimal("0.00")
+        card_realized = db.scalar(select(func.coalesce(func.sum(CardInstallment.amount), 0)).join(CardPurchase, CardInstallment.purchase_id == CardPurchase.id).join(CreditCard, CardPurchase.card_id == CreditCard.id).join(Subgroup, CardPurchase.subgroup_id == Subgroup.id).join(Group, Subgroup.group_id == Group.id).where(Group.category_id == item.category_id, CardInstallment.invoice_month == start)) or Decimal("0.00")
+        realized += card_realized
         planned = item.planned_amount
         total_planned += planned
         total_realized += realized
@@ -300,6 +304,9 @@ def dashboard_summary(reference_month: date | None = None, db: Session = Depends
         FinancialEntry.status == "REALIZADO").group_by(FinancialEntry.entry_type)).all():
         totals[kind] = Decimal(str(amount))
 
+    card_expenses = db.scalar(select(func.coalesce(func.sum(CardInstallment.amount), 0)).where(CardInstallment.invoice_month == start)) or Decimal("0.00")
+    totals["DESPESA"] += card_expenses
+
     category_rows = db.execute(
         select(Category.id, Category.name, func.coalesce(func.sum(FinancialEntry.amount), 0))
         .join(Group, Group.category_id == Category.id)
@@ -307,8 +314,23 @@ def dashboard_summary(reference_month: date | None = None, db: Session = Depends
         .join(FinancialEntry, FinancialEntry.subgroup_id == Subgroup.id)
         .where(FinancialEntry.competence_date >= start, FinancialEntry.competence_date <= end,
                FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type == "DESPESA")
-        .group_by(Category.id, Category.name).order_by(func.sum(FinancialEntry.amount).desc()).limit(6)
+        .group_by(Category.id, Category.name)
     ).all()
+
+    card_category_rows = db.execute(
+        select(Category.id, Category.name, func.coalesce(func.sum(CardInstallment.amount), 0))
+        .join(Group, Group.category_id == Category.id)
+        .join(Subgroup, Subgroup.group_id == Group.id)
+        .join(CardPurchase, CardPurchase.subgroup_id == Subgroup.id)
+        .join(CardInstallment, CardInstallment.purchase_id == CardPurchase.id)
+        .where(CardInstallment.invoice_month == start)
+        .group_by(Category.id, Category.name)
+    ).all()
+    category_totals = {r[0]: [r[1], Decimal(str(r[2]))] for r in category_rows}
+    for row in card_category_rows:
+        if row[0] in category_totals: category_totals[row[0]][1] += Decimal(str(row[2]))
+        else: category_totals[row[0]] = [row[1], Decimal(str(row[2]))]
+    category_rows = sorted([(key, value[0], value[1]) for key, value in category_totals.items()], key=lambda r: r[2], reverse=True)[:6]
 
     recent = db.scalars(select(FinancialEntry).order_by(FinancialEntry.movement_date.desc(), FinancialEntry.id.desc()).limit(8)).all()
     recent_items = [{"id": e.id, "date": e.movement_date.isoformat(), "description": e.description,
@@ -324,6 +346,8 @@ def dashboard_summary(reference_month: date | None = None, db: Session = Depends
             FinancialEntry.competence_date >= month_start, FinancialEntry.competence_date <= month_end,
             FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type.in_(["RECEITA", "DESPESA"])
         ).group_by(FinancialEntry.entry_type)).all(): vals[kind] = Decimal(str(amount))
+        card_month = db.scalar(select(func.coalesce(func.sum(CardInstallment.amount), 0)).where(CardInstallment.invoice_month == month_start)) or Decimal("0.00")
+        vals["DESPESA"] += card_month
         flow.append({"month": month_start.isoformat(), "income": str(vals["RECEITA"]), "expenses": str(vals["DESPESA"])})
         previous = month_start - timedelta(days=1)
         cursor = previous.replace(day=1)
@@ -340,3 +364,88 @@ def dashboard_summary(reference_month: date | None = None, db: Session = Depends
             "net_result": str(totals["RECEITA"] - totals["DESPESA"] - totals["INVESTIMENTO"]),
             "expense_categories": [{"category_id": r[0], "category_name": r[1], "amount": str(r[2])} for r in category_rows],
             "recent_entries": recent_items, "monthly_flow": flow, "budget_planned": budget_total}
+
+# Cartões de crédito: compras parceladas compõem despesas por competência da fatura.
+from calendar import monthrange as _monthrange
+from app.models import CreditCard, CardPurchase, CardInstallment, CardPayment
+from app.schemas.core import CreditCardIn, CreditCardOut, CardPurchaseIn, CardPurchaseOut, CardPaymentIn, CardPaymentOut
+
+def _month_add(value: date, offset: int) -> date:
+    index = value.year * 12 + value.month - 1 + offset
+    return date(index // 12, index % 12 + 1, 1)
+
+def _invoice_month(purchase_date: date, closing_day: int) -> date:
+    return _month_add(purchase_date.replace(day=1), 0 if purchase_date.day <= closing_day else 1)
+
+@router.get("/credit-cards", response_model=list[CreditCardOut])
+def credit_cards_list(db: Session = Depends(get_db)):
+    return list(db.scalars(select(CreditCard).order_by(CreditCard.name)).all())
+
+@router.post("/credit-cards", response_model=CreditCardOut, status_code=201)
+def credit_cards_create(payload: CreditCardIn, db: Session = Depends(get_db)):
+    return create_item(db, CreditCard, payload)
+
+@router.put("/credit-cards/{card_id}", response_model=CreditCardOut)
+def credit_cards_update(card_id: int, payload: CreditCardIn, db: Session = Depends(get_db)):
+    card = db.get(CreditCard, card_id)
+    if not card: raise HTTPException(404, "Cartão não encontrado.")
+    for key, value in payload.model_dump().items(): setattr(card, key, value)
+    db.commit(); db.refresh(card); return card
+
+@router.get("/credit-cards/{card_id}/purchases", response_model=list[CardPurchaseOut])
+def credit_card_purchases(card_id: int, db: Session = Depends(get_db)):
+    if not db.get(CreditCard, card_id): raise HTTPException(404, "Cartão não encontrado.")
+    return list(db.scalars(select(CardPurchase).where(CardPurchase.card_id == card_id).order_by(CardPurchase.purchase_date.desc())).all())
+
+@router.post("/card-purchases", response_model=CardPurchaseOut, status_code=201)
+def card_purchase_create(payload: CardPurchaseIn, db: Session = Depends(get_db)):
+    card = db.get(CreditCard, payload.card_id)
+    if not card: raise HTTPException(404, "Cartão não encontrado.")
+    if payload.subgroup_id is not None:
+        subgroup = db.get(Subgroup, payload.subgroup_id)
+        if not subgroup: raise HTTPException(404, "Subgrupo não encontrado.")
+        category = db.get(Category, db.get(Group, subgroup.group_id).category_id)
+        if category.nature not in ("MISTA", "DESPESA"):
+            raise HTTPException(422, "A categoria do cartão deve aceitar despesas.")
+    if payload.person_id is not None and not db.get(Person, payload.person_id): raise HTTPException(404, "Pessoa não encontrada.")
+    total_cents = int(payload.total_amount * 100)
+    if total_cents < payload.installments_count:
+        raise HTTPException(422, "O valor total deve cobrir pelo menos R$ 0,01 por parcela.")
+    purchase = CardPurchase(**payload.model_dump())
+    db.add(purchase); db.flush()
+    base_cents, remainder = divmod(total_cents, payload.installments_count)
+    amounts = [Decimal(base_cents + int(idx < remainder)) / 100 for idx in range(payload.installments_count)]
+    first_month = _invoice_month(payload.purchase_date, card.closing_day)
+    for idx, amount in enumerate(amounts, 1):
+        db.add(CardInstallment(purchase_id=purchase.id, installment_number=idx, invoice_month=_month_add(first_month, idx-1), amount=amount))
+    db.commit(); db.refresh(purchase); return purchase
+
+@router.get("/invoices")
+def invoices_list(card_id: int | None = None, reference_month: date | None = None, db: Session = Depends(get_db)):
+    stmt = select(CardInstallment, CardPurchase, CreditCard).join(CardPurchase, CardInstallment.purchase_id == CardPurchase.id).join(CreditCard, CardPurchase.card_id == CreditCard.id)
+    if card_id: stmt = stmt.where(CreditCard.id == card_id)
+    if reference_month: stmt = stmt.where(CardInstallment.invoice_month == reference_month.replace(day=1))
+    rows = db.execute(stmt.order_by(CardInstallment.invoice_month.desc(), CreditCard.name, CardPurchase.description)).all()
+    grouped = {}
+    for installment, purchase, card in rows:
+        key = (card.id, installment.invoice_month)
+        if key not in grouped: grouped[key] = {"card_id": card.id, "card_name": card.name, "invoice_month": installment.invoice_month.isoformat(), "due_date": date(installment.invoice_month.year + (1 if installment.invoice_month.month == 12 else 0), 1 if installment.invoice_month.month == 12 else installment.invoice_month.month + 1, min(card.due_day, _monthrange(installment.invoice_month.year + (1 if installment.invoice_month.month == 12 else 0), 1 if installment.invoice_month.month == 12 else installment.invoice_month.month + 1)[1])).isoformat(), "total": Decimal("0.00"), "paid": Decimal("0.00"), "items": []}
+        grouped[key]["total"] += installment.amount
+        grouped[key]["items"].append({"description": purchase.description, "installment": f"{installment.installment_number}/{purchase.installments_count}", "amount": str(installment.amount)})
+    for item in grouped.values():
+        paid = db.scalar(select(func.coalesce(func.sum(CardPayment.amount), 0)).where(CardPayment.card_id == item["card_id"], CardPayment.invoice_month == date.fromisoformat(item["invoice_month"]))) or 0
+        item["paid"] = str(paid); item["total"] = str(item["total"]); item["remaining"] = str(max(Decimal("0"), Decimal(item["total"]) - Decimal(str(paid))))
+    return list(grouped.values())
+
+@router.post("/card-payments", response_model=CardPaymentOut, status_code=201)
+def card_payment_create(payload: CardPaymentIn, db: Session = Depends(get_db)):
+    if not db.get(CreditCard, payload.card_id): raise HTTPException(404, "Cartão não encontrado.")
+    account = db.get(FinancialAccount, payload.account_id)
+    if not account: raise HTTPException(404, "Conta financeira não encontrada.")
+    if payload.invoice_month.day != 1: raise HTTPException(422, "A competência da fatura deve ser o primeiro dia do mês.")
+    invoice_month = payload.invoice_month
+    invoice_total = db.scalar(select(func.coalesce(func.sum(CardInstallment.amount), 0)).join(CardPurchase, CardInstallment.purchase_id == CardPurchase.id).where(CardPurchase.card_id == payload.card_id, CardInstallment.invoice_month == invoice_month)) or Decimal("0.00")
+    already_paid = db.scalar(select(func.coalesce(func.sum(CardPayment.amount), 0)).where(CardPayment.card_id == payload.card_id, CardPayment.invoice_month == invoice_month)) or Decimal("0.00")
+    if invoice_total <= 0: raise HTTPException(404, "Não há compras para a fatura informada.")
+    if payload.amount > invoice_total - already_paid: raise HTTPException(422, "O pagamento excede o saldo em aberto da fatura.")
+    payment = CardPayment(**payload.model_dump()); db.add(payment); db.commit(); db.refresh(payment); return payment

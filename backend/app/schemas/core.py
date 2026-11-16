@@ -98,3 +98,32 @@ class BudgetOut(ORMModel):
     reference_income: Decimal
     status: str
     items: list[BudgetItemOut]
+
+class CreditCardIn(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    brand: str | None = Field(default=None, max_length=40)
+    last_four: str | None = Field(default=None, pattern=r"^\d{4}$")
+    credit_limit: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    closing_day: int = Field(ge=1, le=31)
+    due_day: int = Field(ge=1, le=31)
+    active: bool = True
+    notes: str | None = None
+class CreditCardOut(CreditCardIn, ORMModel): id: int
+class CardPurchaseIn(BaseModel):
+    card_id: int
+    purchase_date: date
+    description: str = Field(min_length=2, max_length=180)
+    total_amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    installments_count: int = Field(default=1, ge=1, le=48)
+    subgroup_id: int | None = None
+    person_id: int | None = None
+    notes: str | None = None
+class CardPurchaseOut(CardPurchaseIn, ORMModel): id: int
+class CardPaymentIn(BaseModel):
+    card_id: int
+    account_id: int
+    payment_date: date
+    invoice_month: date
+    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    notes: str | None = None
+class CardPaymentOut(CardPaymentIn, ORMModel): id: int

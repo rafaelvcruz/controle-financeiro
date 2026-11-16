@@ -313,7 +313,7 @@ def dashboard_summary(reference_month: date | None = None, db: Session = Depends
         .join(FinancialEntry, FinancialEntry.subgroup_id == Subgroup.id)
         .where(FinancialEntry.competence_date >= start, FinancialEntry.competence_date <= end,
                FinancialEntry.status == "REALIZADO", FinancialEntry.entry_type == "DESPESA")
-        .group_by(Category.id, Category.name)
+        .group_by(Category.id, Category.name).order_by(func.sum(FinancialEntry.amount).desc()).limit(6)
     ).all()
 
     card_category_rows = db.execute(

@@ -192,4 +192,50 @@ O limite utilizado corresponde ao valor total das parcelas lançadas menos os pa
 - `python -m compileall` no backend: aprovado.
 - Teste de integração da API com SQLite temporário: aprovado para cadastro de conta/cartão/compra, cálculo do limite, pagamento e baixa no saldo da conta, bloqueio de edição de compra com fatura paga, edição/exclusão de pagamento, edição/exclusão de compra e rejeição de compra acima do limite.
 - Integridade do ZIP: será verificada na geração do pacote.
-- Compilação Angular: aprovada com `npm run build`. A execução integrada Docker/PostgreSQL permanece pendente.
+- Compilação Angular: não executada; `npm install` excedeu o limite de tempo deste ambiente. A execução integrada Docker/PostgreSQL também permanece pendente.
+
+
+## Versão 0.8.0 — Backups automáticos e recuperação
+
+Esta versão adiciona uma rotina de backup lógico do PostgreSQL, executada pelo serviço `backup` do Docker Compose:
+
+- Primeiro backup é tentado assim que o banco fica saudável.
+- Novos backups são tentados a cada 24 horas (configurável).
+- Arquivos em formato custom do PostgreSQL (`.dump`), com timestamp UTC no nome.
+- Retenção padrão de 14 dias; backups mais antigos são removidos após um backup bem-sucedido.
+- Se um backup falhar, o arquivo parcial é removido e a rotina tenta novamente no ciclo seguinte.
+- Os arquivos ficam na pasta `backups/` do projeto, fora do volume do banco.
+
+### Ativar e conferir
+
+1. Copie `.env.example` para `.env` (se ainda não fez) e defina uma senha forte em `POSTGRES_PASSWORD`.
+2. Crie a pasta `backups` se desejar: `mkdir backups` (Windows PowerShell: `New-Item -ItemType Directory -Force backups`).
+3. Inicie/atualize os serviços: `docker compose up -d --build`.
+4. Confira a rotina: `docker compose logs -f backup`.
+5. Confira os arquivos na pasta `backups/`. O primeiro arquivo deve surgir após a primeira execução bem-sucedida.
+
+Variáveis:
+- `BACKUP_INTERVAL_SECONDS`: intervalo entre tentativas, padrão `86400` (24 horas).
+- `BACKUP_RETENTION_DAYS`: retenção local, padrão `14` dias.
+
+### Restaurar um backup
+
+A restauração sobrescreve objetos existentes no banco. Primeiro pare a API para evitar gravações durante o processo:
+
+```bash
+docker compose stop api
+./scripts/restore-backup.sh ./backups/controle-financeiro-AAAAMMDDTHHMMSSZ.dump
+docker compose start api
+```
+
+No Windows, execute o script em Git Bash/WSL ou use o comando equivalente documentado no script. Confirme sempre o nome e a data do arquivo antes de restaurar.
+
+### Limites e recomendações de segurança
+
+- O backup é local e **não protege contra perda/roubo do próprio computador ou disco**. Copie periodicamente a pasta `backups/` para outro dispositivo ou armazenamento seguro.
+- Um backup só é confiável depois de testar a restauração em um banco separado. A rotina não faz esse teste automaticamente.
+- Esta versão **ainda não implementa autenticação/autorização da aplicação nem auditoria de alterações**. Não exponha as portas na internet; mantenha o uso na rede local confiável até implementar essas proteções.
+- O serviço de backup depende de Docker Compose e de espaço disponível no disco. Monitore `docker compose logs backup` e a existência dos arquivos.
+- O script de restauração é destrutivo para os objetos existentes e exige confirmação digitando `RESTAURAR`.
+
+**Validação desta entrega:** testes de regressão do backend aprovados; scripts shell verificados; `docker compose config --quiet` e compilação Angular em imagem limpa aprovados. A execução integrada da API com PostgreSQL não foi realizada.

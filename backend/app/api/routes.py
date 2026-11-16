@@ -178,3 +178,108 @@ def transfers_update(transfer_id: int, payload: TransferIn, db: Session = Depend
     except IntegrityError:
         db.rollback(); raise HTTPException(409, "Não foi possível atualizar a transferência.")
     return item
+
+# Planejamento orçamentário mensal
+from calendar import monthrange
+from datetime import date
+from sqlalchemy.orm import selectinload
+from app.models import Budget, BudgetItem
+from app.schemas.core import BudgetIn, BudgetOut
+
+
+def _validate_budget_payload(payload: BudgetIn, db: Session):
+    if payload.reference_month.day != 1:
+        raise HTTPException(422, "A data de referência deve ser o primeiro dia do mês.")
+    seen = set()
+    for item in payload.items:
+        if item.category_id in seen:
+            raise HTTPException(422, "Uma categoria não pode aparecer duas vezes no mesmo orçamento.")
+        seen.add(item.category_id)
+        if not db.get(Category, item.category_id):
+            raise HTTPException(404, f"Categoria {item.category_id} não encontrada.")
+
+
+def _budget_query():
+    return select(Budget).options(selectinload(Budget.items)).order_by(Budget.reference_month.desc())
+
+@router.get("/budgets", response_model=list[BudgetOut])
+def budgets_list(db: Session = Depends(get_db)):
+    return list(db.scalars(_budget_query()).all())
+
+@router.post("/budgets", response_model=BudgetOut, status_code=201)
+def budgets_create(payload: BudgetIn, db: Session = Depends(get_db)):
+    _validate_budget_payload(payload, db)
+    data = payload.model_dump()
+    items = data.pop("items")
+    budget = Budget(**data, items=[BudgetItem(**item) for item in items])
+    db.add(budget)
+    try:
+        db.commit(); db.refresh(budget)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Já existe um orçamento para esse mês ou há uma categoria duplicada.")
+    return db.scalar(_budget_query().where(Budget.id == budget.id))
+
+@router.get("/budgets/{budget_id}", response_model=BudgetOut)
+def budgets_get(budget_id: int, db: Session = Depends(get_db)):
+    budget = db.scalar(_budget_query().where(Budget.id == budget_id))
+    if not budget: raise HTTPException(404, "Orçamento não encontrado.")
+    return budget
+
+@router.put("/budgets/{budget_id}", response_model=BudgetOut)
+def budgets_update(budget_id: int, payload: BudgetIn, db: Session = Depends(get_db)):
+    budget = db.get(Budget, budget_id)
+    if not budget: raise HTTPException(404, "Orçamento não encontrado.")
+    _validate_budget_payload(payload, db)
+    data = payload.model_dump()
+    items = data.pop("items")
+    for key, value in data.items(): setattr(budget, key, value)
+    budget.items.clear()
+    db.flush()
+    budget.items.extend(BudgetItem(**item) for item in items)
+    try:
+        db.commit(); db.refresh(budget)
+    except IntegrityError:
+        db.rollback(); raise HTTPException(409, "Já existe outro orçamento para esse mês.")
+    return db.scalar(_budget_query().where(Budget.id == budget.id))
+
+@router.delete("/budgets/{budget_id}", status_code=204)
+def budgets_delete(budget_id: int, db: Session = Depends(get_db)):
+    budget = db.get(Budget, budget_id)
+    if not budget: raise HTTPException(404, "Orçamento não encontrado.")
+    db.delete(budget); db.commit()
+
+@router.get("/budgets/{budget_id}/summary")
+def budgets_summary(budget_id: int, db: Session = Depends(get_db)):
+    budget = db.scalar(_budget_query().where(Budget.id == budget_id))
+    if not budget: raise HTTPException(404, "Orçamento não encontrado.")
+    start = budget.reference_month
+    end = date(start.year, start.month, monthrange(start.year, start.month)[1])
+    rows = []
+    total_planned = Decimal("0.00")
+    total_realized = Decimal("0.00")
+    for item in budget.items:
+        category = db.get(Category, item.category_id)
+        realized = db.scalar(
+            select(func.coalesce(func.sum(FinancialEntry.amount), 0))
+            .join(Subgroup, FinancialEntry.subgroup_id == Subgroup.id)
+            .join(Group, Subgroup.group_id == Group.id)
+            .where(Group.category_id == item.category_id,
+                   FinancialEntry.status == "REALIZADO",
+                   FinancialEntry.entry_type.in_(["DESPESA", "INVESTIMENTO"]),
+                   FinancialEntry.competence_date >= start,
+                   FinancialEntry.competence_date <= end)
+        ) or Decimal("0.00")
+        planned = item.planned_amount
+        total_planned += planned
+        total_realized += realized
+        rows.append({"category_id": item.category_id, "category_name": category.name,
+                     "planned_amount": planned, "planned_percentage": item.planned_percentage,
+                     "realized_amount": realized, "remaining_amount": planned - realized,
+                     "consumption_percentage": (realized / planned * 100) if planned > 0 else None,
+                     "over_budget": realized > planned})
+    return {"budget_id": budget.id, "reference_month": start,
+            "reference_income": budget.reference_income,
+            "total_planned": total_planned, "total_realized": total_realized,
+            "total_remaining": total_planned - total_realized,
+            "items": rows}

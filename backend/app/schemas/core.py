@@ -73,3 +73,28 @@ class TransferOut(TransferIn, ORMModel):
 
 class EntryStatusIn(BaseModel):
     status: str = Field(pattern="^(PREVISTO|REALIZADO|CANCELADO)$")
+
+
+class BudgetItemIn(BaseModel):
+    category_id: int
+    planned_amount: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+    planned_percentage: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
+    notes: str | None = Field(default=None, max_length=300)
+
+class BudgetItemOut(BudgetItemIn, ORMModel):
+    id: int
+
+class BudgetIn(BaseModel):
+    reference_month: date
+    description: str = Field(default="Orçamento mensal", min_length=2, max_length=120)
+    reference_income: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=14, decimal_places=2)
+    status: str = Field(default="ABERTO", pattern="^(ABERTO|ENCERRADO)$")
+    items: list[BudgetItemIn] = Field(default_factory=list)
+
+class BudgetOut(ORMModel):
+    id: int
+    reference_month: date
+    description: str
+    reference_income: Decimal
+    status: str
+    items: list[BudgetItemOut]

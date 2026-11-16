@@ -102,4 +102,38 @@ Na seção **Lançamentos**, é possível editar visualmente os registros existe
 
 **Atenção ao editar saldo inicial:** o valor e a data de abertura são a base para o cálculo do saldo atual. Alterá-los pode mudar o resultado apresentado para a conta. O sistema ainda não mantém histórico de versões do saldo inicial.
 
-**Validação desta entrega:** sintaxe Python e testes de API com banco SQLite em memória foram executados, incluindo cadastro/edição de conta e transferência com conferência dos saldos. A compilação Angular e as imagens Docker foram construídas; a execução integrada com PostgreSQL via Docker Compose ainda não foi validada.
+**Validação desta entrega:** sintaxe Python e testes de API com banco SQLite em memória foram executados, incluindo cadastro/edição de conta e transferência com conferência dos saldos. A compilação Angular e a construção/execução integral via Docker ainda não foram validadas neste ambiente.
+
+
+## Planejamento orçamentário (versão 0.4.0)
+
+A versão 0.4.0 acrescenta planejamento mensal por categoria:
+- Cadastro de um orçamento por mês, com receita de referência, descrição e status aberto/encerrado.
+- Definição de valor planejado por categoria e percentual opcional.
+- Consulta de resumo com total planejado, realizado, disponível e consumo por categoria.
+- Alerta textual quando o realizado ultrapassa o limite planejado.
+- Itens de orçamento são vinculados a categorias existentes; a mesma categoria não pode ser repetida no mesmo orçamento.
+
+### Regras de apuração
+
+- O realizado considera lançamentos `REALIZADO` do tipo `DESPESA` ou `INVESTIMENTO`, agrupados pela **data de competência** dentro do mês do orçamento.
+- Lançamentos `PREVISTO` e `CANCELADO` não entram no realizado.
+- Transferências não são lançamentos de despesa e não entram no orçamento.
+- O pagamento da fatura não deve ser lançado como nova despesa quando as compras já foram registradas; a estrutura de cartões/faturas ainda será implementada.
+- A categoria Extra não recebe percentual automático. Ela pode ser incluída manualmente se fizer sentido no planejamento.
+- O orçamento aceita valor planejado diretamente; o percentual é informativo/opcional e não altera automaticamente o valor.
+
+### Endpoints
+
+- `GET /api/budgets`: lista orçamentos.
+- `POST /api/budgets`: cria orçamento com seus itens.
+- `GET /api/budgets/{id}`: consulta orçamento.
+- `PUT /api/budgets/{id}`: substitui os dados e itens do orçamento.
+- `DELETE /api/budgets/{id}`: exclui orçamento e seus itens.
+- `GET /api/budgets/{id}/summary`: consolida planejado versus realizado por categoria.
+
+A data `reference_month` deve ser sempre o primeiro dia do mês (ex.: `2026-11-01`). O banco impede mais de um orçamento por mês.
+
+### Validação desta versão
+
+Foram executados `compileall` no backend, testes da API com SQLite em memória (incluindo resumo, atualização de itens, exclusão e rejeição de orçamento duplicado) e a compilação Angular. O build e a execução via Docker ainda não foram validados nesta entrega.
